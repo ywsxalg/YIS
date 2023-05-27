@@ -8,32 +8,28 @@ try
     Console.WriteLine("正在启动 YIS 服务…");
     string rootPath = Environment.CurrentDirectory;
     Settings s = new();
-    if(!File.Exists(rootPath + "/settings.json"))
+    if (File.Exists(rootPath + "/settings.json"))
+        s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(rootPath + "/settings.json"));
+    List<string> banIps = s.banIps.ToList();
+    File.WriteAllText(rootPath + "/settings.json", JsonSerializer.Serialize<Settings>(s));
     {
-        Console.WriteLine("未找到配置文件。进行配置。");
-    se1:;
-        Console.WriteLine("侦听端口号：");
-        int p = -1;
-        if (int.TryParse(Console.ReadLine(), out p)) s.port = p;
-        else goto se1;
-    se2:;
-        Console.WriteLine("要求 SSL 加密：");
-        bool b = false;
-        if (bool.TryParse(Console.ReadLine(), out b)) s.forceSsl = b;
-        else goto se2;
-    se3:;
-        Console.WriteLine("调试模式：");
-        if (bool.TryParse(Console.ReadLine(), out b)) s.debug = b;
-        else goto se3;
-        Console.WriteLine("异常处理 404 文件：");
-        s.file404 = Console.ReadLine();
-        File.WriteAllText(rootPath + "/settings.json", JsonSerializer.Serialize(s));
+        Console.WriteLine("服务器当前配置：");
+        Console.WriteLine($"_强制 SSL 加密：{s.forceSsl}；");
+        Console.WriteLine($"_调试模式：{s.debug}；");
+        Console.WriteLine($"_端口：{s.port}；");
+        Console.WriteLine($"_404 返回：{s.file404}；");
+        Console.WriteLine($"_403 返回：{s.file403}；");
+        Console.WriteLine($"_拒绝访问地址：");
+        if (s.banIps != null && s.banIps.Length > 0)
+            foreach (string i in s.banIps)
+                Console.WriteLine(i);
+        Console.WriteLine("按任意键以继续。");
+        Console.ReadKey();
     }
-    else s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(rootPath + "/settings.json"));
-    if(!Directory.Exists(rootPath + "/html/"))
+    if (!Directory.Exists(rootPath + "/html/"))
     {
-        Console.WriteLine("目录不存在。已经自动创建。");
         Directory.CreateDirectory(rootPath + "/html/");
+        Console.WriteLine("目录不存在。已经自动创建。");
     }
     HttpListener h = new();
     h.AuthenticationSchemes = AuthenticationSchemes.Anonymous;
@@ -50,34 +46,53 @@ try
         HttpListenerRequest q = l.Request;
         HttpListenerResponse r = l.Response;
         string uri = q.RawUrl;
-        if (uri == null || !File.Exists(rootPath + "/html" + HttpUtility.UrlDecode(uri)))
+        if(q.HttpMethod.ToLower() == "get")
         {
-            r.StatusCode = 404;
-            if (File.Exists(rootPath + "/html/" + s.file404))
+            if (banIps.Contains(q.RemoteEndPoint.Address.ToString()))
             {
-                r.ContentType = GetMimeMapping(s.file404);
-                Task.Run(() => Write(File.OpenRead(rootPath + "/html/" + s.file404), r.OutputStream));
+                r.StatusCode = 403;
+                if (File.Exists(rootPath + "/html/" + s.file403))
+                {
+                    r.ContentType = GetMimeMapping(s.file403);
+                    Task.Run(() => Write(File.OpenRead(rootPath + "/html/" + s.file403), r.OutputStream));
+                }
+                else
+                {
+                    r.ContentType = "text/plain";
+                    r.OutputStream.Close();
+                }
+                if (s.debug)
+                    Console.WriteLine(DateTime.Now.ToString() + "|接收：" + uri + "，" + q.RemoteEndPoint.ToString() + "，403。");
+            }
+            else if (uri == null || !File.Exists(rootPath + "/html" + HttpUtility.UrlDecode(uri)))
+            {
+                r.StatusCode = 404;
+                if (File.Exists(rootPath + "/html/" + s.file404))
+                {
+                    r.ContentType = GetMimeMapping(s.file404);
+                    Task.Run(() => Write(File.OpenRead(rootPath + "/html/" + s.file404), r.OutputStream));
+                }
+                else
+                {
+                    r.ContentType = "text/plain";
+                    r.OutputStream.Close();
+                }
+                if (s.debug)
+                    Console.WriteLine(DateTime.Now.ToString() + "|接收：" + uri + "，" + q.RemoteEndPoint.ToString() + "，404。");
             }
             else
             {
-                r.ContentType = "text/plain";
-                r.OutputStream.Close();
+                uri = HttpUtility.UrlDecode(uri);
+                r.StatusCode = 200;
+                r.ContentType = GetMimeMapping(uri);
+                Task.Run(() => Write(File.OpenRead(rootPath + "/html" + uri), r.OutputStream));
+                if (s.debug)
+                    Console.WriteLine(DateTime.Now.ToString() + "|接收：" + uri + "，" + q.RemoteEndPoint.ToString() + "，200。");
             }
-            if(s.debug)
-                Console.WriteLine(DateTime.Now.ToString() + "|接收：" + uri + "，" + q.RemoteEndPoint.ToString() + "，404。");
-        }
-        else
-        {
-            uri = HttpUtility.UrlDecode(uri);
-            r.StatusCode = 200;
-            r.ContentType = GetMimeMapping(uri);
-            Task.Run(() => Write(File.OpenRead(rootPath + "/html" + uri), r.OutputStream));
-            if (s.debug)
-                Console.WriteLine(DateTime.Now.ToString() + "|接收：" + uri + "，" + q.RemoteEndPoint.ToString() + "，200。");
         }
     }
 }
-catch(Exception ex)
+catch (Exception ex)
 {
     Console.WriteLine($"发生了错误：“{ex.Message}”。");
 }
@@ -110,5 +125,17 @@ public class Settings
     public bool forceSsl { get; set; }
     public bool debug { get; set; }
     public int port { get; set; }
-    public string file404 { get; set; }
+    public string file404{ get; set; }
+    public string file403 { get; set; }
+    public string[] banIps { get; set; }
+
+    public Settings()
+    {
+        forceSsl = false;
+        debug = false;
+        port = 80;
+        file404 = "";
+        file403 = "";
+        banIps = new string[] { };
+    }
 }
